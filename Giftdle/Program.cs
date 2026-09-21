@@ -1,4 +1,4 @@
-using Giftdle.Components;
+using giftdle.Components;
 
 var builder = WebApplication.CreateBuilder(args);
 
