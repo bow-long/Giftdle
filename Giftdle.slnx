@@ -1,2 +1,5 @@
 <Solution>
+  <Folder Name="/Giftdle/">
+    <Project Path="Giftdle/giftdle.csproj" />
+  </Folder>
 </Solution>
