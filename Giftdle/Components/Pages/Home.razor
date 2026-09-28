@@ -1,7 +1,354 @@
 ﻿@page "/"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+@inject PuzzleStore PuzzleStore
 
-<PageTitle>Home</PageTitle>
+<PageTitle>Giftdle - Guess the gift</PageTitle>
 
-<h1>Hello, worldfsdfs!</h1>
+<div class="gift-game">
+	@if (!IsRecipient)
+	{
+		<header class="game-header setup-header">
+			<div class="header-copy">
+				<p class="eyebrow">Create a private puzzle</p>
+				<h1>Set the scene.</h1>
+				<p class="lede">Answer a few questions about the gift, then send the puzzle to your recipient.</p>
+			</div>
+		</header>
 
-Welcome to your new app.
+		<section class="setup-panel" aria-label="Create a Giftdle link">
+			<div class="role-switcher" role="group" aria-label="Choose your role">
+				<button class="role-button active" @onclick="ShowGifterSetup">I am the gifter</button>
+				<button class="role-button" @onclick="OpenRecipientMode">I am the recipient</button>
+			</div>
+			<div class="setup-heading">
+				<p class="panel-kicker">Gifter setup</p>
+				<h2>Give them useful clues</h2>
+			</div>
+			<div class="question-grid">
+				<div class="field full-field">
+					<label for="gift-name">Gift name</label>
+					<input id="gift-name" @bind="GiftName" placeholder="Keep this secret from the recipient" />
+				</div>
+				<div class="field">
+					<label for="usefulness">Usefulness or funness</label>
+					<select id="usefulness" @bind="Usefulness"><option>Mostly practical</option><option>A mix of useful and fun</option><option>Mostly fun</option></select>
+				</div>
+				<div class="field"><label for="texture">Texture</label><input id="texture" @bind="Texture" placeholder="Soft, smooth, fuzzy..." /></div>
+				<div class="field"><label for="shape">Shape</label><input id="shape" @bind="Shape" placeholder="Round, rectangular..." /></div>
+				<div class="field"><label for="colors">Colors it could include</label><input id="colors" @bind="Colors" placeholder="Blue, black, silver..." /></div>
+				<div class="field"><label for="life-status">Alive or dead</label><select id="life-status" @bind="LifeStatus"><option>Not alive</option><option>Alive</option><option>It depends</option></select></div>
+				<div class="field"><label for="cost-range">Cost range</label><select id="cost-range" @bind="CostRange"><option>Under $25</option><option>$25 - $75</option><option>$75 - $150</option><option>Over $150</option></select></div>
+				<div class="field"><label for="zoo-status">Is it in a zoo?</label><select id="zoo-status" @bind="ZooStatus"><option>No</option><option>Sometimes</option><option>Yes</option></select></div>
+				<div class="field"><label for="office-status">Belongs in an office?</label><select id="office-status" @bind="OfficeStatus"><option>Yes</option><option>No</option><option>Maybe</option></select></div>
+				<div class="field"><label for="bedroom-status">Belongs in a bedroom?</label><select id="bedroom-status" @bind="BedroomStatus"><option>Yes</option><option>No</option><option>Maybe</option></select></div>
+				<div class="field full-field"><label for="gift-date">Gift date</label><input id="gift-date" type="date" @bind="GiftDate" /></div>
+			</div>
+			<button class="primary-action" @onclick="CreatePuzzleLink" disabled="@string.IsNullOrWhiteSpace(GiftName)">Create recipient link</button>
+			@if (!string.IsNullOrWhiteSpace(GeneratedLink))
+			{
+				<div class="generated-link" role="status">
+					<strong>Your recipient link is ready</strong>
+					<input value="@GeneratedLink" readonly aria-label="Generated recipient link" />
+					<button class="copy-button" @onclick="CopyLink">Copy link</button>
+				</div>
+			}
+		</section>
+	}
+	else if (IsRecipient)
+	{
+		<header class="game-header">
+			<div class="header-copy">
+				<p class="eyebrow">A gift puzzle for you</p>
+				<h1>What is the gift?</h1>
+				<p class="lede">Use the clues and make three guesses. Get more clues as you play daily!</p>
+			</div>
+			<div class="date-stamp"><span>Today's puzzle</span><strong>@PuzzleDate.ToString("MMM d")</strong></div>
+		</header>
+
+		@if (Won)
+		{
+			<section class="success-screen" aria-live="polite">
+				<p class="eyebrow">Puzzle complete</p>
+				<h2>You guessed correctly!</h2>
+				<p>The gift is waiting for you on <strong>@GiftDate.ToString("MMMM d, yyyy")</strong>.</p>
+				<div class="success-mark">*</div>
+			</section>
+		}
+		else
+		{
+		<section class="calendar-panel" aria-label="Gift calendar">
+			<div class="calendar-heading"><div><p class="panel-kicker">Gift calendar</p><h2>@GiftDate.ToString("MMMM yyyy")</h2></div><span class="calendar-date">@GiftDate.ToString("MMM d")</span></div>
+			<div class="calendar-grid calendar-weekdays">@foreach (var day in Weekdays){<span>@day</span>}</div>
+			<div class="calendar-grid calendar-days">@for (var index = 0; index < CalendarLeadingDays; index++){<span></span>}@for (var day = 1; day <= DateTime.DaysInMonth(GiftDate.Year, GiftDate.Month); day++){<span class="@(day == GiftDate.Day ? "gift-day" : string.Empty)">@day</span>}</div>
+			<p class="calendar-note">Your gifter scheduled the gift for the marked day.</p>
+		</section>
+
+		<section class="recipient-board-layout @(RevealedClues.Count > 0 ? "clues-visible" : string.Empty)" aria-label="Gift guessing game">
+			<aside class="clue-board" aria-label="Clue board">
+				<div class="clue-board-heading"><p class="panel-kicker">Clue board</p><span>@RevealedClues.Count / @CluePool.Count</span></div>
+				@if (RevealedClues.Count == 0)
+				{
+					<p class="empty-board">No clues yet. Use all three guesses to draw one.</p>
+				}
+				else
+				{
+					<div class="clue-list">@foreach (var clue in RevealedClues){<div class="clue-card"><span class="clue-mark">+</span><span>@clue</span></div>}</div>
+				}
+			</aside>
+			<div class="guess-panel">
+				<div class="panel-heading"><div><p class="panel-kicker">Your turn</p><h2>Make a guess</h2></div><div class="chance-status" aria-label="@AttemptsUsed of @MaxGuesses chances used">@for (var index = 0; index < MaxGuesses; index++){<span class="chance-dot @GetChanceClass(index)" aria-hidden="true"></span>}</div></div>
+				@if (!GameOver)
+				{
+					<div class="guess-form"><label for="gift-guess">Your gift guess</label><div class="input-row"><div class="animated-input"><input id="gift-guess" value="@CurrentGuess" @oninput="HandleInput" @onkeydown="HandleKeyDown" placeholder="Type a gift..." autocomplete="off" aria-label="Your gift guess" /><span class="typed-letters" aria-hidden="true">@foreach (var character in TypedCharacters){<span @key="character.Id" class="typed-letter">@character.Value</span>}</span></div><button class="guess-button" @onclick="SubmitGuess" disabled="@string.IsNullOrWhiteSpace(CurrentGuess)">Guess</button></div></div>
+				}
+				else
+				{
+					<div class="result-banner @(Won ? "won" : "revealed")"><span class="result-icon">@(Won ? "*" : "!")</span><div><strong>@(Won ? "You got it!" : $"The gift was {GiftName}.")</strong><span>@(Won ? "Excellent detective work." : "Your three guesses are complete.")</span></div></div>
+				}
+			</div>
+		</section>
+		<footer class="game-footer"><span><i class="status-dot"></i> @AttemptsUsed / @MaxGuesses guesses used</span><span class="reset-countdown"><i class="status-dot countdown-dot"></i> Next reset in @ResetCountdown</span></footer>
+		}
+	}
+	else
+	{
+		<p class="setup-error">This recipient link is missing gift details. Ask the gifter to create a new link.</p>
+	}
+	@* The recipient flow above is intentionally selected by the generated link. *@
+</div>
+
+@code {
+	private const int MaxGuesses = 3;
+	private string GiftName { get; set; } = string.Empty;
+	private string Usefulness { get; set; } = "A mix of useful and fun";
+	private string Texture { get; set; } = "Smooth";
+	private string Shape { get; set; } = "Rounded";
+	private string Colors { get; set; } = "Black";
+	private string LifeStatus { get; set; } = "Not alive";
+	private string OfficeStatus { get; set; } = "Maybe";
+	private string BedroomStatus { get; set; } = "Maybe";
+	private string CostRange { get; set; } = "$25 - $75";
+	private string ZooStatus { get; set; } = "No";
+	private DateTime GiftDate { get; set; } = DateTime.Today.AddDays(7);
+	private string GeneratedLink { get; set; } = string.Empty;
+	private bool IsRecipient { get; set; }
+	private string? PuzzleToken { get; set; }
+	private bool ProgressLoaded { get; set; }
+	private const string DefaultAnswer = "wireless headphones";
+	private string CurrentGuess { get; set; } = string.Empty;
+	private List<TypedCharacter> TypedCharacters { get; } = [];
+	private List<string> RevealedClues { get; } = [];
+	private int nextCharacterId;
+	private GuessResult?[] Guesses { get; set; } = new GuessResult?[MaxGuesses];
+	private DateTime PuzzleDate { get; set; } = DateTime.Today;
+	private bool IsSimulatedDay { get; set; }
+	private char RandomLetter { get; set; }
+	private readonly string[] Weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+	private int AttemptsUsed => Guesses.Count(guess => guess is not null);
+	private bool Won => Guesses.Any(guess => guess?.IsCorrect == true);
+	private bool GameOver => AttemptsUsed == MaxGuesses;
+	private TimeSpan TimeUntilReset => DateTime.Today.AddDays(1) - DateTime.Now;
+	private string ResetCountdown => TimeUntilReset.ToString(@"hh\:mm\:ss");
+	private DateOnly ProgressDate { get; set; } = DateOnly.FromDateTime(DateTime.Today);
+	private Timer? resetTimer;
+	private int CalendarLeadingDays => (int)new DateTime(GiftDate.Year, GiftDate.Month, 1).DayOfWeek;
+	private List<string> CluePool =>
+	[
+		$"Usefulness: {Usefulness}.",
+		$"Texture: {Texture}.",
+		$"Shape: {Shape}.",
+		$"Possible colors: {Colors}.",
+		$"Alive status: {LifeStatus}.",
+		$"Office item: {OfficeStatus}.",
+		$"Bedroom item: {BedroomStatus}.",
+		$"Cost range: {CostRange}.",
+		$"Zoo status: {ZooStatus}.",
+		$"The gift name has {Answer.Count(character => !char.IsWhiteSpace(character))} letters.",
+		$"The gift name contains the letter '{RandomLetter}'."
+	];
+
+	private string GetChanceClass(int index)
+	{
+		var guess = Guesses[index];
+		return guess is null ? string.Empty : guess.IsCorrect ? "chance-correct" : "chance-wrong";
+	}
+
+	private void HandleInput(ChangeEventArgs args)
+	{
+		var nextGuess = args.Value?.ToString() ?? string.Empty;
+		var previousLength = CurrentGuess.Length;
+		CurrentGuess = nextGuess;
+
+		if (nextGuess.Length >= previousLength)
+		{
+			for (var index = previousLength; index < nextGuess.Length; index++)
+			{
+				TypedCharacters.Add(new TypedCharacter(nextCharacterId++, nextGuess[index]));
+			}
+			return;
+		}
+
+		TypedCharacters.RemoveRange(nextGuess.Length, TypedCharacters.Count - nextGuess.Length);
+	}
+	protected override void OnInitialized()
+	{
+		PuzzleToken = QueryValue("puzzle");
+		IsRecipient = !string.IsNullOrWhiteSpace(PuzzleToken);
+		if (IsRecipient)
+		{
+			if (PuzzleStore.TryGet(PuzzleToken!, out var puzzle) && puzzle is not null)
+			{
+				GiftName = puzzle.GiftName;
+				Usefulness = puzzle.Usefulness;
+				Texture = puzzle.Texture;
+				Shape = puzzle.Shape;
+				Colors = puzzle.Colors;
+				LifeStatus = puzzle.LifeStatus;
+				OfficeStatus = puzzle.OfficeStatus;
+				BedroomStatus = puzzle.BedroomStatus;
+				CostRange = puzzle.CostRange;
+				ZooStatus = puzzle.ZooStatus;
+				GiftDate = puzzle.GiftDate;
+			}
+			else
+			{
+				IsRecipient = false;
+			}
+			RandomLetter = Answer.Where(character => !char.IsWhiteSpace(character)).OrderBy(_ => Random.Shared.Next()).FirstOrDefault();
+		}
+	}
+
+	protected override async Task OnAfterRenderAsync(bool firstRender)
+	{
+		if (!firstRender || !IsRecipient || string.IsNullOrWhiteSpace(PuzzleToken))
+		{
+			return;
+		}
+
+		var savedProgress = await JS.InvokeAsync<string?>("giftdleProgress.get", PuzzleToken);
+		if (!string.IsNullOrWhiteSpace(savedProgress))
+		{
+			try
+			{
+				var progress = System.Text.Json.JsonSerializer.Deserialize<ProgressSnapshot>(savedProgress);
+				if (progress is not null
+					&& progress.ProgressDate == DateOnly.FromDateTime(DateTime.Today)
+					&& progress.Guesses.Length == MaxGuesses)
+				{
+					Guesses = progress.Guesses;
+					RevealedClues.Clear();
+					RevealedClues.AddRange(progress.RevealedClues.Take(CluePool.Count));
+				}
+			}
+			catch (System.Text.Json.JsonException)
+			{
+				await JS.InvokeVoidAsync("giftdleProgress.clear", PuzzleToken);
+			}
+		}
+
+		ProgressDate = DateOnly.FromDateTime(DateTime.Today);
+		ProgressLoaded = true;
+		resetTimer = new Timer(_ => _ = InvokeAsync(CheckForDailyReset), null, 1000, 1000);
+		StateHasChanged();
+	}
+
+	private string? QueryValue(string key)
+	{
+		var query = Navigation.ToAbsoluteUri(Navigation.Uri).Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries);
+		var item = query.FirstOrDefault(value => value.StartsWith($"{key}=", StringComparison.OrdinalIgnoreCase));
+		return item is null ? null : Uri.UnescapeDataString(item[(key.Length + 1)..]);
+	}
+
+	private string Answer => string.IsNullOrWhiteSpace(GiftName) ? DefaultAnswer : GiftName;
+	private void ShowGifterSetup() => IsRecipient = false;
+	private void OpenRecipientMode() => Navigation.NavigateTo("/");
+
+	private void CreatePuzzleLink()
+	{
+		var token = PuzzleStore.Create(new GiftPuzzle(GiftName, Usefulness, Texture, Shape, Colors, LifeStatus, OfficeStatus, BedroomStatus, CostRange, ZooStatus, GiftDate.Date));
+		GeneratedLink = Navigation.BaseUri.TrimEnd('/') + "/?puzzle=" + token;
+	}
+
+	private async Task CopyLink() => await JS.InvokeVoidAsync("navigator.clipboard.writeText", GeneratedLink);
+	private async Task SubmitGuess()
+	{
+		if (GameOver || string.IsNullOrWhiteSpace(CurrentGuess))
+		{
+			return;
+		}
+
+		var normalizedGuess = CurrentGuess.Trim();
+		var isCorrect = normalizedGuess.Equals(Answer, StringComparison.OrdinalIgnoreCase)
+			|| normalizedGuess.Equals("headphones", StringComparison.OrdinalIgnoreCase);
+
+		Guesses[AttemptsUsed] = new GuessResult(normalizedGuess, isCorrect);
+		CurrentGuess = string.Empty;
+		TypedCharacters.Clear();
+		if (!isCorrect && AttemptsUsed == MaxGuesses)
+		{
+			RevealRandomClue();
+		}
+
+		await SaveProgressAsync();
+	}
+
+	private async Task HandleKeyDown(KeyboardEventArgs args)
+	{
+		if (args.Key == "Enter")
+		{
+			await SubmitGuess();
+		}
+	}
+
+	private void RevealRandomClue()
+	{
+		var unrevealedClues = CluePool.Except(RevealedClues).ToList();
+		if (unrevealedClues.Count > 0)
+		{
+			RevealedClues.Add(unrevealedClues[Random.Shared.Next(unrevealedClues.Count)]);
+		}
+	}
+
+	private async Task CheckForDailyReset()
+	{
+		var today = DateOnly.FromDateTime(DateTime.Today);
+		if (today == ProgressDate)
+		{
+			await InvokeAsync(StateHasChanged);
+			return;
+		}
+
+		ProgressDate = today;
+		PuzzleDate = DateTime.Today;
+		Guesses = new GuessResult?[MaxGuesses];
+		RevealedClues.Clear();
+		CurrentGuess = string.Empty;
+		TypedCharacters.Clear();
+		await SaveProgressAsync();
+		await InvokeAsync(StateHasChanged);
+	}
+
+	private async Task SaveProgressAsync()
+	{
+		if (ProgressLoaded && IsRecipient && !string.IsNullOrWhiteSpace(PuzzleToken))
+		{
+			var progress = new ProgressSnapshot(ProgressDate, Guesses, RevealedClues);
+			var serialized = System.Text.Json.JsonSerializer.Serialize(progress);
+			await JS.InvokeVoidAsync("giftdleProgress.set", PuzzleToken, serialized);
+		}
+	}
+
+	public void Dispose() => resetTimer?.Dispose();
+
+	private sealed record GuessResult(string Text, bool IsCorrect);
+	private sealed record ProgressSnapshot(DateOnly ProgressDate, GuessResult?[] Guesses, List<string> RevealedClues);
+	private sealed class TypedCharacter(int id, char value)
+	{
+		public int Id { get; } = id;
+		public char Value { get; } = value;
+	}
+}
